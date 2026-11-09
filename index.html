@@ -26,6 +26,12 @@
   #panel select, #panel input[type=range] { width: 100%; }
   #panel select { background: #14231c; color: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
   #story { position: relative; z-index: 5; }
+  #boardPop { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.25); opacity: 0; pointer-events: none; transition: opacity .35s; }
+  #boardPop.open { opacity: 1; pointer-events: auto; }
+  #boardPop .card { position: relative; max-width: 460px; max-height: 85vh; overflow: auto; opacity: 1; transform: scale(.96); transition: transform .35s; }
+  #boardPop.open .card { transform: none; }
+  .popX { position: absolute; top: 10px; right: 12px; background: none; border: 0; color: inherit; font-size: 26px; line-height: 1; cursor: pointer; opacity: .75; }
+  #walkHint { position: fixed; left: 0; right: 0; text-align: center; bottom: 4vh; z-index: 6; color: #fff; font-size: 13px; letter-spacing: .06em; text-shadow: 0 1px 8px rgba(0,0,0,.8); pointer-events: none; transition: opacity .6s; animation: bob 2s ease-in-out infinite; }
   #story section { min-height: 140vh; display: flex; align-items: flex-end; padding: 0 5vw 9vh; }
   .card { max-width: 400px; background: var(--glass); border: 1px solid var(--line); border-radius: 20px; padding: 22px 24px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); opacity: 0; transform: translateY(24px); transition: opacity .7s, transform .7s; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
   section.visible .card { opacity: 1; transform: none; }
@@ -86,6 +92,8 @@
 </div>
 
 <main id="story"></main>
+<div id="boardPop"><article class="card"></article></div>
+<div id="walkHint">Scroll to walk the trail ↓</div>
 <div id="plain"><div class="inner"></div></div>
 
 <script type="module">
@@ -152,17 +160,22 @@ const CONFIG = {
    ============================================================ */
 document.getElementById('brand').textContent = CONFIG.name;
 const story = document.getElementById('story');
-CONFIG.stops.forEach((s, i) => {
-  const sec = document.createElement('section');
-  sec.innerHTML = `<article class="card ${i === 0 ? 'hero' : ''}"><div class="kicker">${s.kicker}</div><h2>${s.title}</h2>` +
+CONFIG.stops.forEach(() => story.appendChild(document.createElement('section')));   // empty: they only give the page its scroll length
+const walkHint = document.getElementById('walkHint');
+const popup = document.getElementById('boardPop'), popCard = popup.querySelector('.card');
+function openPopup(i) {
+  const s = CONFIG.stops[i];
+  popCard.className = 'card' + (i === 0 ? ' hero' : '');
+  popCard.innerHTML = `<button class="popX" aria-label="Close">×</button><div class="kicker">${s.kicker}</div><h2>${s.title}</h2>` +
     (s.org ? `<div class="org">${s.org}</div>` : '') + (s.text ? `<p>${s.text}</p>` : '') + (s.note ? `<p class="note">${s.note}</p>` : '') +
     (s.bullets ? `<ul>${s.bullets.map(b => `<li>${b}</li>`).join('')}</ul>` : '') +
-    (s.links ? `<div class="links">${s.links.map(l => `<a href="${l.href}" target="_blank" rel="noopener">${l.label}</a>`).join('')}</div>` : '') +
-    (i === 0 ? '<div class="hint">Scroll to walk the trail ↓</div>' : '') + `</article>`;
-  story.appendChild(sec);
-});
-const io = new IntersectionObserver(es => es.forEach(e => e.target.classList.toggle('visible', e.isIntersecting)), { threshold: 0.35 });
-story.querySelectorAll('section').forEach(s => io.observe(s));
+    (s.links ? `<div class="links">${s.links.map(l => `<a href="${l.href}" target="_blank" rel="noopener">${l.label}</a>`).join('')}</div>` : '');
+  popCard.querySelector('.popX').onclick = closePopup;
+  popup.classList.add('open');
+}
+function closePopup() { popup.classList.remove('open'); }
+popup.addEventListener('click', ev => { if (ev.target === popup) closePopup(); });
+addEventListener('keydown', ev => { if (ev.key === 'Escape') closePopup(); });
 const plain = document.getElementById('plain');
 plain.querySelector('.inner').innerHTML = `<button id="plainClose">Back to the trail</button>
 <h1>Sai Chandra Mouli T</h1>
@@ -765,7 +778,19 @@ const cottageSpots = CONFIG.stops.map((s, i) => {
   return { x: c.x, z: c.z, px: p.x, pz: p.z };
 });
 const nearCot = (x, z, r) => cottageSpots.some(c => Math.hypot(x - c.x, z - c.z) < r);
-const treeOK = (x, z, y) => { const pd = pgSample(PG.d, x, z); return pd > 1.5 && Math.abs(x - riverX(z)) > 9 && slopeAt(x, z) < 0.85 && !inView(x, z) && !nearCot(x, z, 7) && Math.random() < 1 - smooth(46, 66, y); };
+// notice-board spots: a few metres ahead of each stop, on the opposite side to the name signpost, turned to face the walker
+const boardSpots = CONFIG.stops.map((s, i) => {
+  const a = Math.min(stopIdx(i) + 24, NP - 2), p = path[a], q = path[a + 1], tx = q.x - p.x, tz = q.z - p.z, l = Math.hypot(tx, tz) || 1;
+  const nx = -tz / l, nz = tx / l, cs = cottageSpots[i], cSide = Math.sign((cs.x - p.x) * nx + (cs.z - p.z) * nz) || 1;
+  const x = p.x - nx * 2.3, z = p.z - nz * 2.3, cam = path[stopIdx(i)];   // always opposite the name signpost (which sits on +n)
+  return { x, z, idx: a, yaw: Math.atan2(cam.x - x, cam.z - z) };
+});
+const nearBoard = (x, z, r) => boardSpots.some(b => Math.hypot(x - b.x, z - b.z) < r);
+// keep the line of sight from the reading spot to each board clear
+const segD = (x, z, ax, az, bx, bz) => { const vx = bx - ax, vz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1))); return Math.hypot(x - ax - vx * t, z - az - vz * t); };
+const boardView = boardSpots.map((b, i) => { const c = path[Math.max(0, stopIdx(i) - 20)]; return { ax: c.x, az: c.z, bx: b.x, bz: b.z }; });
+const blocksBoard = (x, z, r) => boardView.some(v => segD(x, z, v.ax, v.az, v.bx, v.bz) < r);
+const treeOK = (x, z, y) => { const pd = pgSample(PG.d, x, z); return pd > 1.5 && Math.abs(x - riverX(z)) > 9 && slopeAt(x, z) < 0.85 && !inView(x, z) && !nearCot(x, z, 7) && !nearBoard(x, z, 6.5) && !blocksBoard(x, z, 4.5) && Math.random() < 1 - smooth(46, 66, y); };
 
 function plants(trunkG, leafG, tMat, lMat, pts, fn) {
   if (!pts.length) return;
@@ -783,7 +808,7 @@ const treeFn = (o, c, p) => { o.position.set(p[0], p[1] - 0.1, p[2]); o.rotation
   const alt = broad.filter((_, i) => i % 6 === 0), reg = broad.filter((_, i) => i % 6 !== 0);
   for (let k = 0; k < treeVars.length; k++) plants(treeVars[k][0], treeVars[k][1], barkMat, leafGreenMat, reg.filter((_, i) => i % treeVars.length === k), treeFn);
   plants(treeVars[0][0], treeVars[0][1], barkMat, leafAutumnMat, alt, treeFn);
-  const hi = domain(Math.floor(300 * Q), (x, z, y) => y > 44 && y < 80 && slopeAt(x, z) < 1.0 && Math.abs(x - riverX(z)) > 5);
+  const hi = domain(Math.floor(300 * Q), (x, z, y) => y > 44 && y < 80 && slopeAt(x, z) < 1.0 && Math.abs(x - riverX(z)) > 5 && pgSample(PG.d, x, z) > 1.5 && !nearCot(x, z, 7) && !nearBoard(x, z, 6.5) && !blocksBoard(x, z, 4.5));
   const allPines = pines.concat(hi);
   for (let k = 0; k < pineVars.length; k++) plants(pineVars[k][0], pineVars[k][1], barkMat, pineMat, allPines.filter((_, i) => i % pineVars.length === k), treeFn);
 }
@@ -808,7 +833,7 @@ function instancedSimple(geo, mat, pts, fn, shadow) {
   m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; m.castShadow = !!shadow; m.receiveShadow = !!shadow; scene.add(m); return m;
 }
 const tintFn = (sMin, sMax, ySt) => (o, c, p) => { o.position.set(p[0], p[1] - 0.02, p[2]); o.rotation.set(0, rnd(0, 6.28), 0); const s = rnd(sMin, sMax); o.scale.set(s, s * rnd(1 - ySt, 1 + ySt), s); c.setRGB(1 - rnd(0, 0.2), 1 - rnd(0, 0.1), 1 - rnd(0, 0.25)); };
-const floorOK = (x, z, y) => !nearCot(x, z, 3.4) && pgSample(PG.d, x, z) > 0.95 && Math.abs(x - riverX(z)) > 2.8 && slopeAt(x, z) < 0.85;
+const floorOK = (x, z, y) => !nearCot(x, z, 3.4) && !nearBoard(x, z, 2.2) && !blocksBoard(x, z, 1.6) && pgSample(PG.d, x, z) > 0.95 && Math.abs(x - riverX(z)) > 2.8 && slopeAt(x, z) < 0.85;
 instancedSimple(quadsBuf(3, 0.6, 0.5, 0.05), grassMat, nearPath(Math.floor(15000 * Q), 0.9, 26, 1.1, floorOK), tintFn(0.7, 1.7, 0.3));
 instancedSimple(quadsBuf(2, 1.5, 1.4, 0.35), fernMat, nearPath(Math.floor(1500 * Q), 1.3, 30, 1.2, floorOK), tintFn(0.7, 1.6, 0.25));
 {
@@ -834,7 +859,7 @@ function boulderGeo(seed) {
   const rockMat = new THREE.MeshStandardMaterial({ map: rockPBR.albedo, normalMap: rockPBR.normal, normalScale: new THREE.Vector2(1.2, 1.2), roughness: 0.92 });
   const geos = [boulderGeo(3), boulderGeo(8), boulderGeo(15)];
   const rockFn = (sMin, sMax, sink) => (o, c, p) => { o.position.set(p[0], p[1] + 0.05 - sink, p[2]); o.rotation.set(rnd(0, 0.5), rnd(0, 6.28), rnd(0, 0.5)); const s = rnd(sMin, sMax); o.scale.set(s, s * rnd(0.7, 1.1), s * rnd(0.8, 1.3)); c.setRGB(1 - rnd(0, 0.3), 1 - rnd(0, 0.3), 1 - rnd(0, 0.3)); };
-  const trailRocks = nearPath(Math.floor(260 * Q), 0.9, 6, 1.2, (x, z) => !nearCot(x, z, 3.2) && pgSample(PG.d, x, z) > 0.75 && Math.abs(x - riverX(z)) > 3 && slopeAt(x, z) < 1);
+  const trailRocks = nearPath(Math.floor(260 * Q), 0.9, 6, 1.2, (x, z) => !nearCot(x, z, 3.2) && !nearBoard(x, z, 2) && pgSample(PG.d, x, z) > 0.75 && Math.abs(x - riverX(z)) > 3 && slopeAt(x, z) < 1);
   const forestRocks = nearPath(Math.floor(220 * Q), 5, 40, 1.2, (x, z) => !nearCot(x, z, 4) && pgSample(PG.d, x, z) > 2 && Math.abs(x - riverX(z)) > 3 && slopeAt(x, z) < 1.2);
   const riverRocks = []; for (let z = 30; z > -230 && riverRocks.length < 220 * Q; z -= rnd(0.5, 1.8)) { const x = riverX(z) + rnd(-3.2, 3.2); riverRocks.push([x, HG(x, z), z]); }
   geos.forEach((g, k) => {
@@ -870,6 +895,54 @@ CONFIG.stops.forEach((s, i) => {
   const board = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.67, 0.08), [wood, wood, wood, wood, front, front]); board.position.set(0, 1.85, 0.1); board.castShadow = true;
   grp.add(post, board); scene.add(grp);
 });
+
+/* ---------- 10b. Trailside notice boards: the resume lives on the trail ---------- */
+const boardMats = [], boardHit = [];
+function boardTexture(s, isHero) {
+  const W = 1024, Hh = 800, [c, g] = cvs(W, Hh);
+  g.fillStyle = '#efe2c2'; g.fillRect(0, 0, W, Hh);
+  for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(${120 + Math.random() * 40},${90 + Math.random() * 30},50,${Math.random() * 0.05})`; g.fillRect(Math.random() * W, Math.random() * Hh, 2 + Math.random() * 6, 2 + Math.random() * 6); }
+  const vg = g.createRadialGradient(W / 2, Hh / 2, Hh * 0.35, W / 2, Hh / 2, W * 0.75); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(90,60,25,0.28)'); g.fillStyle = vg; g.fillRect(0, 0, W, Hh);
+  [[30, 30], [W - 30, 30], [30, Hh - 30], [W - 30, Hh - 30]].forEach(([x, y]) => { g.fillStyle = '#7a2e1c'; g.beginPath(); g.arc(x, y, 9, 0, 7); g.fill(); g.fillStyle = 'rgba(255,255,255,.4)'; g.beginPath(); g.arc(x - 3, y - 3, 3, 0, 7); g.fill(); });
+  const wrap = (txt, maxW) => { const out = []; let line = ''; for (const w of txt.split(' ')) { const t = line ? line + ' ' + w : w; if (g.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t; } if (line) out.push(line); return out; };
+  const links = [];
+  const layout = (k, draw) => {
+    let y = 62; const L = 64, R = W - 64, mw = R - L; links.length = 0;
+    const put = (font, color, txt, lh, x = L, w = mw) => { g.font = font; const ls = wrap(txt, w); if (draw) { g.fillStyle = color; ls.forEach((l, n) => g.fillText(l, x, y + n * lh)); } y += ls.length * lh; };
+    g.textBaseline = 'top';
+    put(`600 ${24 * k}px Georgia, serif`, '#8a5a2b', s.kicker.toUpperCase(), 32 * k); y += 4 * k;
+    put(`bold ${(isHero ? 64 : 54) * k}px Georgia, serif`, '#2a1a0c', s.title, (isHero ? 72 : 62) * k); y += 2 * k;
+    if (s.org) put(`italic ${28 * k}px Georgia, serif`, '#5a4026', s.org, 36 * k);
+    if (draw) { g.strokeStyle = 'rgba(90,60,30,.45)'; g.lineWidth = 2; g.beginPath(); g.moveTo(L, y + 12 * k); g.lineTo(R, y + 12 * k); g.stroke(); }
+    y += 28 * k;
+    if (s.text) { put(`${30 * k}px Georgia, serif`, '#2e2214', s.text, 40 * k); y += 10 * k; }
+    if (s.bullets) s.bullets.forEach(b => { if (draw) { g.fillStyle = '#8a5a2b'; g.beginPath(); g.arc(L + 8, y + 17 * k, 6 * k, 0, 7); g.fill(); } put(`${30 * k}px Georgia, serif`, '#2e2214', b, 39 * k, L + 30, mw - 30); y += 10 * k; });
+    if (s.note) { y += 6 * k; put(`italic ${28 * k}px Georgia, serif`, '#6a4a28', s.note, 36 * k); }
+    if (s.links) { y += 14 * k; let x = L; g.font = `600 ${28 * k}px Georgia, serif`; s.links.forEach(l => { const w = g.measureText(l.label).width + 48 * k, h = 52 * k; if (draw) { g.fillStyle = '#5b3a1c'; g.beginPath(); g.roundRect(x, y, w, h, h / 2); g.fill(); g.fillStyle = '#f6e7c8'; g.fillText(l.label, x + 24 * k, y + 12 * k); } links.push({ href: l.href, x0: x / W, x1: (x + w) / W, y0: y / Hh, y1: (y + h) / Hh }); x += w + 16 * k; }); y += 52 * k; }
+    if (isHero) { y += 18 * k; put(`italic ${26 * k}px Georgia, serif`, '#8a5a2b', 'Scroll to keep walking  ↓', 34 * k); }
+    return y;
+  };
+  let k = 1; while (k > 0.55 && layout(k, false) > Hh - 50) k -= 0.04;
+  layout(k, true);
+  return { tex: cTex(c), links: links.slice() };
+}
+{
+  const frameWood = new THREE.MeshStandardMaterial({ map: barkPBR.albedo, normalMap: barkPBR.normal, roughness: 1, color: 0x8a6a4c });
+  const BW = 2.6, BH = BW * 800 / 1024;
+  boardSpots.forEach((b, i) => {
+    const s = CONFIG.stops[i], { tex, links } = boardTexture(s, i === 0);
+    const face = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.25, roughness: 0.95 });
+    boardMats.push(face);
+    const g = new THREE.Group(); g.position.set(b.x, HG(b.x, b.z), b.z); g.rotation.y = b.yaw;
+    const cy = 1.05 + BH / 2;
+    [-BW / 2 - 0.08, BW / 2 + 0.08].forEach(x => { const p = new THREE.Mesh(new THREE.BoxGeometry(0.14, cy + BH / 2 + 0.35, 0.14), frameWood); p.position.set(x, (cy + BH / 2 + 0.35) / 2 - 0.2, -0.04); p.castShadow = true; g.add(p); });
+    const back = new THREE.Mesh(new THREE.BoxGeometry(BW + 0.2, BH + 0.2, 0.08), frameWood); back.position.set(0, cy, -0.06); back.castShadow = true; g.add(back);
+    const paper = new THREE.Mesh(new THREE.PlaneGeometry(BW, BH), face); paper.position.set(0, cy, -0.015); g.add(paper);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(BW + 0.7, 0.07, 0.75), frameWood); roof.position.set(0, cy + BH / 2 + 0.33, 0.12); roof.rotation.x = 0.32; roof.castShadow = true; g.add(roof);
+    scene.add(g); g.updateMatrixWorld(true);
+    boardHit.push({ mesh: paper, links, stop: i, center: paper.getWorldPosition(V()), idx: b.idx });
+  });
+}
 
 /* ============================================================
    11. Sky, stars, moon, clouds, lights, image-based lighting
@@ -1099,6 +1172,7 @@ const lampPostGeo = new THREE.CylinderGeometry(0.035, 0.05, 1.5, 6), lampArmGeo 
     let tx = q.x - p.x, tz = q.z - p.z; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
     const side = n % 2 ? 1 : -1, off = 1.25;
     const x = p.x + -tz * side * off, z = p.z + tx * side * off, y = HG(x, z);
+    if (nearBoard(x, z, 2.2)) continue;
     const g = new THREE.Group(); g.position.set(x, y, z);
     const post = new THREE.Mesh(lampPostGeo, lampWood); post.position.y = 0.75; g.add(post);
     const arm = new THREE.Mesh(lampArmGeo, lampWood); arm.position.set(0.12 * -side * -tz, 1.5, 0.12 * -side * tx); arm.position.set(0, 1.5, 0); g.add(arm);
@@ -1112,6 +1186,7 @@ const lampLights = [];
 for (let i = 0; i < 4; i++) { const L = new THREE.PointLight(0xffb764, 0, 14, 1.6); scene.add(L); lampLights.push(L); }
 function updateLamps() {
   const k = nightF * (1 - 0.5 * clamp01(cur.rain)) + 0.0;
+  for (const m of boardMats) m.emissiveIntensity = 0.25 + 0.35 * nightF;
   lampBulbMat.emissiveIntensity = 0.3 + 3 * nightF; lampGlowMat.opacity = 0.05 + 0.95 * nightF;
   const cp = camera.position, near = lampPos.map(v => [v.distanceToSquared(cp), v]).sort((a, b) => a[0] - b[0]);
   for (let i = 0; i < lampLights.length; i++) { const L = lampLights[i]; if (near[i]) L.position.copy(near[i][1]); L.intensity = 9 * k; }
@@ -1266,7 +1341,8 @@ function frame() {
   const maxScroll = Math.max(1, document.documentElement.scrollHeight - innerHeight), tTarget = clamp01(scrollY / maxScroll), prev = tSmooth;
   tSmooth += (tTarget - tSmooth) * (1 - Math.exp(-dt * 3)); const speed = Math.abs(tSmooth - prev) / Math.max(dt, 1e-4);
 
-  const f = tSmooth * (NP - 1 - 70), i = Math.min(Math.floor(f), NP - 72), k = f - i;
+  const nS = CONFIG.stops.length - 1, u = tSmooth * nS, sj = Math.min(Math.floor(u), nS - 1), fr = u - sj;
+  const f = Math.min((sj + fr - 0.8 * Math.sin(2 * Math.PI * fr) / (2 * Math.PI)) / nS * (NP - 70), NP - 72), i = Math.min(Math.floor(f), NP - 72), k = f - i;   // slows down at every notice board
   pa.set(lerp(path[i].x, path[i + 1].x, k), lerp(path[i].y, path[i + 1].y, k), lerp(path[i].z, path[i + 1].z, k)); pb.copy(path[Math.min(i + 45, NP - 1)]);
   camera.position.copy(pa); camera.position.y += 1.65 + Math.sin(tSmooth * 900) * 0.035 * Math.min(speed * 25, 1) + Math.sin(nowS * 0.6) * 0.01;
   dirTmp.set(pb.x - pa.x, 0, pb.z - pa.z).normalize().lerp(UPHILL, 0.22).normalize();   // look mostly along the path, a little uphill
@@ -1274,6 +1350,10 @@ function frame() {
   const yaw = -mouseX * 1.1 + Math.sin(nowS * 0.13) * 0.3;
   aheadV.copy(dirS).applyAxisAngle(UPV, yaw);
   camLook.copy(camera.position).addScaledVector(aheadV, 12); camLook.y = pa.y + 1.45 - mouseY * 5 + (pb.y - pa.y) * 0.25;
+  let bw = 0, bc = null;
+  for (const b of boardHit) { const d = b.idx - f, w = smooth(-6, 10, d) * (1 - smooth(45, 95, d)); if (w > bw) { bw = w; bc = b.center; } }
+  if (bc) camLook.lerp(bc, bw * 0.8);   // turn to read the board as you reach it
+  walkHint.style.opacity = tSmooth < 0.015 ? 1 : 0;
   camera.lookAt(camLook); camTarget.copy(camera.position).lerp(camLook, 0.25);
 
   updateEnv(dt, new Date(), nowS);
@@ -1299,6 +1379,13 @@ function frame() {
   updateBirds(nowS, dt); updateAudio(); updateCottages(nowS); updateLamps();
   renderer.render(scene, camera); requestAnimationFrame(frame);
 }
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+const boardAt = ev => { ndc.set(ev.clientX / innerWidth * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObjects(boardHit.map(b => b.mesh))[0]; if (!hit || hit.distance > 18) return null;
+  const b = boardHit.find(b => b.mesh === hit.object), uv = hit.uv, yy = 1 - uv.y; return { b, link: b.links.find(l => uv.x > l.x0 && uv.x < l.x1 && yy > l.y0 && yy < l.y1) || null }; };
+const onTrail = ev => ev.target === document.body || ev.target === document.documentElement || !!(ev.target.closest && ev.target.closest('#story'));
+addEventListener('click', ev => { if (!onTrail(ev) || popup.classList.contains('open')) return; const h = boardAt(ev); if (!h) return; if (h.link) window.open(h.link.href, '_blank', 'noopener'); else openPopup(h.b.stop); });
+addEventListener('pointermove', ev => { if (onTrail(ev)) document.body.style.cursor = boardAt(ev) ? 'pointer' : ''; });
 addEventListener('resize', () => { setFov(); renderer.setSize(innerWidth, innerHeight); });
 applyWeather();
 await say('Almost there…');
