@@ -250,7 +250,8 @@ document.getElementById('gear').onclick = () => panel.classList.toggle('open');
 document.addEventListener('pointerdown', e => { if (panel.classList.contains('open') && !panel.contains(e.target) && !e.target.closest('#gear')) panel.classList.remove('open'); });
 
 const qs = new URLSearchParams(location.search);
-const lowQ = qs.get('q') === 'low' || (qs.get('q') !== 'high' && (innerWidth < 800 || /Mobi|Android/i.test(navigator.userAgent)));
+const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+const lowQ = qs.get('q') === 'low' || (qs.get('q') !== 'high' && (innerWidth < 800 || isMobile));
 const qSel = document.getElementById('qSel'); qSel.value = lowQ ? 'low' : 'high';
 qSel.onchange = () => { const u = new URL(location.href); u.searchParams.set('q', qSel.value); location.href = u.toString(); };
 const loadTxt = () => document.getElementById('loadTxt');
@@ -262,11 +263,11 @@ async function init() {
 /* ============================================================
    3. Renderer / scene
    ============================================================ */
-const renderer = new THREE.WebGLRenderer({ antialias: !lowQ, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, lowQ ? 1.5 : 2));
+const renderer = new THREE.WebGLRenderer({ antialias: !lowQ, powerPreference: lowQ ? 'low-power' : 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, lowQ ? 1 : 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = lowQ ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.9;
 renderer.debug.onShaderError = (gl, program, vs, fs) => showErr('Shader error:\n' + (gl.getProgramInfoLog(program) || '') + '\n' + (gl.getShaderInfoLog(fs) || '') + '\n' + (gl.getShaderInfoLog(vs) || ''));
@@ -798,10 +799,10 @@ function plants(trunkG, leafG, tMat, lMat, pts, fn) {
   const tm = new THREE.InstancedMesh(trunkG, tMat, pts.length), lm = new THREE.InstancedMesh(leafG, lMat, pts.length), o = new THREE.Object3D(), c = new THREE.Color();
   pts.forEach((p, i) => { fn(o, c, p); o.updateMatrix(); tm.setMatrixAt(i, o.matrix); lm.setMatrixAt(i, o.matrix); lm.setColorAt(i, c); });
   tm.instanceMatrix.needsUpdate = lm.instanceMatrix.needsUpdate = true; if (lm.instanceColor) lm.instanceColor.needsUpdate = true;
-  tm.castShadow = lm.castShadow = true; tm.receiveShadow = true; scene.add(tm, lm);
+  tm.castShadow = true; lm.castShadow = !lowQ; tm.receiveShadow = true; scene.add(tm, lm);
   lm.customDepthMaterial = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: lMat.map, alphaTest: 0.45, side: THREE.DoubleSide });
 }
-const Q = lowQ ? 0.4 : 1;
+const Q = lowQ ? 0.3 : 1;
 const treeFn = (o, c, p) => { o.position.set(p[0], p[1] - 0.1, p[2]); o.rotation.set((Math.random() - .5) * 0.05, rnd(0, 6.28), (Math.random() - .5) * 0.05); const s = rnd(0.95, 1.5); o.scale.set(s * rnd(0.9, 1.1), s * rnd(0.95, 1.25), s * rnd(0.9, 1.1)); c.setRGB(1 - rnd(0, 0.18), 1 - rnd(0, 0.1), 1 - rnd(0, 0.2)); };
 {
   const forest = nearPath(Math.floor(1100 * Q), 1.5, 42, 1.25, treeOK).concat(domain(Math.floor(260 * Q), treeOK));
@@ -966,7 +967,7 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.Shad
 sky.renderOrder = -10; sky.frustumCulled = false; scene.add(sky);
 const envScene = new THREE.Scene(), envSky = new THREE.Mesh(sky.geometry, sky.material); envSky.frustumCulled = false; envScene.add(envSky);
 const pmrem = new THREE.PMREMGenerator(renderer); let envRT = null, envT = -99;
-function refreshEnv(t) { if (t - envT < 10) return; envT = t; try { const rt = pmrem.fromScene(envScene, 0, 1, 1100); if (envRT) envRT.dispose(); envRT = rt; scene.environment = rt.texture; } catch (e) { console.warn('env map', e); } }
+function refreshEnv(t) { if (t - envT < (lowQ ? 30 : 10)) return; envT = t; try { const rt = pmrem.fromScene(envScene, 0, 1, 1100); if (envRT) envRT.dispose(); envRT = rt; scene.environment = rt.texture; } catch (e) { console.warn('env map', e); } }
 
 const stars = (() => {
   const n = 900, a = new Float32Array(n * 3);
@@ -1016,9 +1017,9 @@ function makePrecip(count, isLine) {
   const obj = isLine ? new THREE.LineSegments(g, m) : new THREE.Points(g, m);
   obj.frustumCulled = false; obj.visible = false; obj.userData.count = count; scene.add(obj); return obj;
 }
-const rain = makePrecip(lowQ ? 2200 : 4000, true), snowfall = makePrecip(lowQ ? 1200 : 2500, false);
+const rain = makePrecip(lowQ ? 1200 : 4000, true), snowfall = makePrecip(lowQ ? 700 : 2500, false);
 
-const LEAVES = lowQ ? 90 : 190;
+const LEAVES = lowQ ? 50 : 190;
 const leafGeo = new THREE.PlaneGeometry(0.22, 0.15, 4, 1); { const lp = leafGeo.attributes.position; for (let i = 0; i < lp.count; i++) { const x = lp.getX(i); lp.setZ(i, x * x * 1.6); } leafGeo.computeVertexNormals(); }
 const leafMesh = new THREE.InstancedMesh(leafGeo, new THREE.MeshStandardMaterial({ map: fallLeafTex, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.6 }), LEAVES);
 leafMesh.frustumCulled = false; scene.add(leafMesh);
@@ -1333,12 +1334,19 @@ function updateAudio() {
   N.bb.gain.setTargetAtTime((0.5 + 0.5 * dayF) * (layer.birds ? 1 : 0), t, 1);
 }
 
-let tSmooth = 0, mouseX = 0, mouseY = 0, lastT = performance.now() / 1000;
+let tSmooth = 0, mouseX = 0, mouseY = 0, lastT = performance.now() / 1000, lastRender = 0, shadowFrame = 0;
+const FRAME_MIN = lowQ ? 1 / 32 : 0;   // cap to ~30fps on phones; cools things down and halves GPU work
+sun.shadow.autoUpdate = !lowQ;         // on phones, update the sun shadow only when we ask
 addEventListener('pointermove', ev => { mouseX = ev.clientX / innerWidth - 0.5; mouseY = ev.clientY / innerHeight - 0.5; });
 const dirS = V(0, 0, -1), dirTmp = V(), pa = V(), pb = V(), UPV = V(0, 1, 0), UPHILL = V(0, 0, -1), dummy = new THREE.Object3D(), aheadV = V();
 const camLook = V();
 function frame() {
-  const nowS = performance.now() / 1000, dt = Math.min(nowS - lastT, 0.05); lastT = nowS;
+  requestAnimationFrame(frame);
+  if (document.hidden) { lastT = performance.now() / 1000; return; }   // pause when tab is in the background
+  const nowS = performance.now() / 1000;
+  if (nowS - lastRender < FRAME_MIN) return;
+  lastRender = nowS;
+  const dt = Math.min(nowS - lastT, 0.05); lastT = nowS;
   const maxScroll = Math.max(1, document.documentElement.scrollHeight - innerHeight), tTarget = clamp01(scrollY / maxScroll), prev = tSmooth;
   tSmooth += (tTarget - tSmooth) * (1 - Math.exp(-dt * 3)); const speed = Math.abs(tSmooth - prev) / Math.max(dt, 1e-4);
 
@@ -1378,7 +1386,8 @@ function frame() {
     ffGeo.attributes.position.needsUpdate = true;
   }
   updateBirds(nowS, dt); updateAudio(); updateCottages(nowS); updateLamps();
-  renderer.render(scene, camera); requestAnimationFrame(frame);
+  if (lowQ && (shadowFrame++ & 1) === 0) sun.shadow.needsUpdate = true;   // refresh sun shadow every other rendered frame
+  renderer.render(scene, camera);
 }
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 const boardAt = ev => { ndc.set(ev.clientX / innerWidth * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera);
